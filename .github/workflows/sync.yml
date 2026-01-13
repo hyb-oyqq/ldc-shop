@@ -21,8 +21,7 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            const core = require('@actions/core');
-            const exec = require('@actions/exec');
+
 
             try {
               // Configure Git
