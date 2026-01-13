@@ -40,36 +40,8 @@
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
 2. 左侧菜单 **Storage & Databases** → **D1**
 3. 点击 **Create database**，输入名称（如 `ldc-shop`）
-4. 创建后，复制 **Database ID**
 
-#### 2. 修改 wrangler.json
-
-在仓库的 `_workers_next/wrangler.json` 中添加 D1 配置：
-
-```json
-{
-    "name": "ldc-shop-next",
-    "main": ".open-next/worker.js",
-    "compatibility_date": "2025-11-12",
-    "compatibility_flags": ["nodejs_compat"],
-    "assets": {
-        "directory": ".open-next/assets",
-        "binding": "ASSETS"
-    },
-    "d1_databases": [
-        {
-            "binding": "DB",
-            "database_name": "你的数据库名",
-            "database_id": "你的-DATABASE-ID"
-        }
-    ],
-    "observability": {
-        "enabled": true
-    }
-}
-```
-
-#### 3. 连接 Git 仓库部署
+#### 2. 连接 Git 仓库部署
 
 1. Cloudflare Dashboard → **Workers & Pages** → **Create application**
 2. 选择 **Connect to Git**，连接你的 GitHub/GitLab 仓库
@@ -78,11 +50,21 @@
    - **Build command**: `npm install && npx opennextjs-cloudflare build`
    - **Deploy command**: `npx wrangler deploy`
 
-4. 点击 **Deploy**
+4. 点击 **Deploy**（首次可能会失败，因为还没绑定数据库，继续下一步）
+
+#### 3. 绑定 D1 数据库
+
+部署后，进入项目 **Settings** → **Bindings**：
+
+1. 点击 **Add binding**
+2. 选择 **D1 Database**
+3. **Variable name**: `DB`（必须是这个名字）
+4. 选择你创建的数据库
+5. 保存
 
 #### 4. 配置环境变量
 
-部署成功后，进入项目 **Settings** → **Variables and Secrets**：
+进入项目 **Settings** → **Variables and Secrets**：
 
 | 变量名 | 类型 | 说明 |
 |--------|------|------|
@@ -96,7 +78,11 @@
 
 > ⚠️ **重要**: `NEXT_PUBLIC_APP_URL` **必须**设置为 Text 类型，不能用 Secret，否则支付签名会失败！
 
-#### 5. 首次访问
+#### 5. 重新部署
+
+回到 **Deployments** 页面，点击最新部署记录的 **Retry deployment**。
+
+#### 6. 首次访问
 
 访问你的 Workers 域名，首页会自动创建所有数据库表。
 
