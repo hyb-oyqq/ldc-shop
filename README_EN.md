@@ -57,7 +57,27 @@ A robust, serverless virtual goods shop built with **Next.js 16**, **Shadcn UI**
     - 🌓 **Light/Dark/System themes**.
     - ⏱️ **Auto Update (Upstream Sync)**: GitHub Actions workflow included for Fork users to auto-sync upstream changes and trigger Vercel deploy.
 
+
+### 🆕 Workers Edition Exclusive Features
+
+> The following features are available ONLY in the Cloudflare Workers version:
+
+| Feature | Description |
+|---------|-------------|
+| 📱 **Telegram Notifications** | Real-time purchase/refund alerts to Telegram, supports English/Chinese, built-in setup wizard |
+| 🗑️ **Bulk Card Delete** | Batch delete unused card keys with multi-select/select-all |
+| 🔄 **Shared Card Products** | Unlimited stock products that don't deduct inventory (for shared accounts, tutorials, etc.) |
+| 📝 **Store Description (SEO)** | Custom site description |
+| 🖼️ **Store Logo** | Custom site Logo and Favicon |
+| 📜 **Custom Footer** | Custom site footer content |
+| 🎨 **Theme Colors** | 7 theme colors available (Purple/Blue/Cyan/Green/Orange/Pink/Red) |
+| 🤖 **Noindex Support** | Option to set 'noindex' to prevent search engine indexing |
+| 👤 **User Profile** | Points overview, order stats, order history |
+| 📧 **Email Notifications** | Automatic order completion emails (via Resend) |
+| 📱 **Mobile Navigation** | Optimized bottom navigation bar for mobile |
+
 ## 🚀 Deployment Guide
+
 
 ### ⭐ Recommended: Cloudflare Workers
 
