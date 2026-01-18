@@ -25,7 +25,8 @@ export function AdminDataContent({ shopName }: { shopName: string | null }) {
 
   const handleImport = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    const formData = new FormData(e.currentTarget)
+    const form = e.currentTarget
+    const formData = new FormData(form)
     const file = formData.get('file') as File
 
     if (!file || file.size === 0) {
@@ -44,7 +45,7 @@ export function AdminDataContent({ shopName }: { shopName: string | null }) {
         const errors = typeof result.errors === 'number' ? result.errors : 0
         setImportResult({ count, errors })
         toast.success(t('admin.export.importSuccess', { count, errors }))
-        e.currentTarget.reset()
+        form?.reset()
       } else {
         toast.error(result.error || t('common.error'))
       }

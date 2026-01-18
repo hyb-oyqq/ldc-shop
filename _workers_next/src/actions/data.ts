@@ -97,8 +97,14 @@ export async function importData(formData: FormData) {
                 try {
                     await executeStatement(newStatement)
                     successCount++
-                } catch (e) {
-                    console.error('Failed statement:', newStatement)
+                } catch (e: any) {
+                    const errorMsg = e?.message || String(e)
+                    // Silently skip if table doesn't exist (Vercel export might have tables that Workers doesn't have)
+                    if (errorMsg.includes('no such table') || errorMsg.includes('does not exist')) {
+                        // Skip silently - this is expected for some tables
+                    } else {
+                        console.error('Failed statement:', newStatement, errorMsg)
+                    }
                     errorCount++
                 }
             } else if (trimmed.toUpperCase().startsWith('INSERT')) {
