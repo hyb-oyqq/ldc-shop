@@ -6,6 +6,7 @@ import { cache } from "react";
 
 // Database initialization state
 let dbInitialized = false;
+let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
 const CURRENT_SCHEMA_VERSION = 9;
 
@@ -99,6 +100,7 @@ async function ensureDatabaseInitialized() {
         await ensureProductsColumns();
         await ensureLoginUsersTable();
         await ensureLoginUsersColumns(); // Add this call
+        loginUsersSchemaReady = true;
         await ensureUserNotificationsTable();
         await ensureAdminMessagesTable();
         await ensureUserMessagesTable();
@@ -348,6 +350,16 @@ async function ensureOrdersColumns() {
 async function ensureLoginUsersColumns() {
     await safeAddColumn('login_users', 'last_checkin_at', 'INTEGER');
     await safeAddColumn('login_users', 'consecutive_days', 'INTEGER DEFAULT 0');
+}
+
+export async function ensureLoginUsersSchema() {
+    if (loginUsersSchemaReady) return;
+    await ensureLoginUsersTable();
+    await ensureLoginUsersColumns();
+    await safeAddColumn('login_users', 'email', 'TEXT');
+    await safeAddColumn('login_users', 'points', 'INTEGER DEFAULT 0 NOT NULL');
+    await safeAddColumn('login_users', 'is_blocked', 'INTEGER DEFAULT 0');
+    loginUsersSchemaReady = true;
 }
 
 async function isProductAggregatesBackfilled(): Promise<boolean> {
@@ -1413,17 +1425,7 @@ export async function recordLoginUser(userId: string, username?: string | null, 
         }
     } catch (error: any) {
         if (isMissingTable(error) || error?.code === '42703' || error?.message?.includes('column')) {
-            await ensureLoginUsersTable();
-            // Ensure points column exists for existing tables
-            try {
-                await db.run(sql.raw(`ALTER TABLE login_users ADD COLUMN email TEXT`));
-            } catch { /* duplicate column */ }
-            try {
-                await db.run(sql.raw(`ALTER TABLE login_users ADD COLUMN points INTEGER DEFAULT 0 NOT NULL`));
-            } catch { /* duplicate column */ }
-            try {
-                await db.run(sql.raw(`ALTER TABLE login_users ADD COLUMN is_blocked INTEGER DEFAULT 0`));
-            } catch { /* duplicate column */ }
+            await ensureLoginUsersSchema();
 
             const result = await db.insert(loginUsers).values({
                 userId,

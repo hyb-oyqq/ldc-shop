@@ -3,7 +3,7 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { loginUsers } from "@/lib/db/schema"
-import { getSetting } from "@/lib/db/queries"
+import { ensureLoginUsersSchema, getSetting } from "@/lib/db/queries"
 import { eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -22,6 +22,7 @@ export async function checkIn() {
     const userId = session.user.id
 
     try {
+        await ensureLoginUsersSchema()
         // Get user state
         const user = await db.query.loginUsers.findFirst({
             where: eq(loginUsers.userId, userId),
@@ -98,6 +99,7 @@ export async function getCheckinStatus() {
     }
 
     try {
+        await ensureLoginUsersSchema()
         const user = await db.query.loginUsers.findFirst({
             where: eq(loginUsers.userId, session.user.id),
             columns: { lastCheckinAt: true }
