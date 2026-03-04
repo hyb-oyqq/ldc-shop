@@ -9,7 +9,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 16;
+const CURRENT_SCHEMA_VERSION = 17;
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
 const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Promise<void> | null }> = {
     products: { ready: false, pending: null },
@@ -149,6 +149,7 @@ async function ensureDatabaseInitialized() {
         await migrateTimestampColumnsToMs();
         await migrateMalformedGitHubUserIds();
         await migrateGitHubUsersDedupAndCanonicalize();
+        await migrateLinuxDoUsersDedupAndCanonicalize();
         await ensureIndexes();
         await backfillProductAggregates();
 
@@ -361,6 +362,7 @@ async function ensureDatabaseInitialized() {
     await migrateTimestampColumnsToMs();
     await migrateMalformedGitHubUserIds();
     await migrateGitHubUsersDedupAndCanonicalize();
+    await migrateLinuxDoUsersDedupAndCanonicalize();
     await ensureIndexes();
     await backfillProductAggregates();
 
@@ -1706,6 +1708,42 @@ function normalizeGitHubUsernameValue(username?: string | null): string | null {
     return normalized
 }
 
+function normalizeLinuxDoUsernameValue(username?: string | null): string | null {
+    if (!username) return null
+    const normalized = username.trim().toLowerCase()
+    if (!normalized || normalized.startsWith('gh_')) return null
+    return normalized
+}
+
+function isLinuxDoOfficialIdValue(userId?: string | null): boolean {
+    if (!userId) return false
+    return /^\d+$/.test(userId.trim())
+}
+
+async function resolveLinuxDoOfficialIdByUsername(username: string): Promise<string | null> {
+    const normalizedUsername = normalizeLinuxDoUsernameValue(username)
+    if (!normalizedUsername) return null
+
+    try {
+        const response = await fetch(`https://linux.do/u/${encodeURIComponent(normalizedUsername)}.json`, {
+            headers: {
+                accept: 'application/json',
+                'user-agent': 'ldc-shop-migrator/1.2.8',
+            },
+        })
+        if (!response.ok) return null
+
+        const payload = await response.json() as { user?: { id?: unknown }, id?: unknown }
+        const resolved = payload?.user?.id ?? payload?.id
+        if (resolved === undefined || resolved === null) return null
+
+        const id = String(resolved).trim()
+        return isLinuxDoOfficialIdValue(id) ? id : null
+    } catch {
+        return null
+    }
+}
+
 function mergeLoginUserRows(primary: GitHubLoginUserRow, secondary: GitHubLoginUserRow) {
     const createdCandidates = [toEpochMs(primary.createdAt), toEpochMs(secondary.createdAt)].filter((value): value is number => value !== null)
     const lastLoginCandidates = [toEpochMs(primary.lastLoginAt), toEpochMs(secondary.lastLoginAt)].filter((value): value is number => value !== null)
@@ -1982,6 +2020,156 @@ async function migrateGitHubUsersDedupAndCanonicalize() {
         for (const row of rows) {
             if (row.userId === canonical.userId) continue
             await moveUserReferences(row.userId, canonical.userId)
+        }
+    }
+}
+
+async function migrateLinuxDoUsersDedupAndCanonicalize() {
+    await ensureLoginUsersSchema()
+
+    const linuxDoUsers = await db.select({
+        userId: loginUsers.userId,
+        username: loginUsers.username,
+        email: loginUsers.email,
+        points: loginUsers.points,
+        isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,
+        desktopNotificationsEnabled: sql<boolean>`COALESCE(${loginUsers.desktopNotificationsEnabled}, FALSE)`,
+        createdAt: loginUsers.createdAt,
+        lastLoginAt: loginUsers.lastLoginAt,
+    })
+        .from(loginUsers)
+        .where(sql`${loginUsers.username} IS NOT NULL AND LOWER(${loginUsers.username}) NOT LIKE 'gh_%'`)
+
+    if (!linuxDoUsers.length) return
+
+    const groups = new Map<string, GitHubLoginUserRow[]>()
+    for (const row of linuxDoUsers) {
+        const normalizedUsername = normalizeLinuxDoUsernameValue(row.username)
+        if (!normalizedUsername) continue
+
+        const list = groups.get(normalizedUsername) || []
+        list.push({
+            userId: row.userId,
+            username: row.username,
+            email: row.email || null,
+            points: Number(row.points || 0),
+            isBlocked: !!row.isBlocked,
+            desktopNotificationsEnabled: !!row.desktopNotificationsEnabled,
+            createdAt: row.createdAt || null,
+            lastLoginAt: row.lastLoginAt || null,
+        })
+        groups.set(normalizedUsername, list)
+    }
+
+    for (const [normalizedUsername, rows] of groups.entries()) {
+        if (!rows.length) continue
+
+        const canonicalCandidates = [...rows]
+            .filter((row) => isLinuxDoOfficialIdValue(row.userId))
+            .sort((a, b) => {
+                const bTime = toEpochMs(b.lastLoginAt) || 0
+                const aTime = toEpochMs(a.lastLoginAt) || 0
+                if (bTime !== aTime) return bTime - aTime
+                const aCreated = toEpochMs(a.createdAt) || 0
+                const bCreated = toEpochMs(b.createdAt) || 0
+                return aCreated - bCreated
+            })
+
+        const createdCandidates = rows.map((row) => toEpochMs(row.createdAt)).filter((value): value is number => value !== null)
+        const lastLoginCandidates = rows.map((row) => toEpochMs(row.lastLoginAt)).filter((value): value is number => value !== null)
+
+        let canonicalUserId = canonicalCandidates[0]?.userId || null
+        if (!canonicalUserId) {
+            // Force migration without requiring users to log in again: resolve official Linux DO id by username.
+            canonicalUserId = await resolveLinuxDoOfficialIdByUsername(normalizedUsername)
+            if (!canonicalUserId) continue
+        }
+
+        const canonical = rows.find((row) => row.userId === canonicalUserId) || null
+        const mergedPoints = rows.reduce((sum, row) => sum + Number(row.points || 0), 0)
+        const mergedBlocked = rows.some((row) => row.isBlocked)
+        const mergedDesktopNotifications = rows.some((row) => row.desktopNotificationsEnabled)
+        const mergedEmail = canonical?.email || rows.map((row) => row.email).find((value) => !!value) || null
+
+        const mergedCreatedAt = createdCandidates.length
+            ? new Date(Math.min(...createdCandidates))
+            : (canonical?.createdAt || new Date())
+        const mergedLastLoginAt = lastLoginCandidates.length
+            ? new Date(Math.max(...lastLoginCandidates))
+            : (canonical?.lastLoginAt || new Date())
+
+        if (!canonical) {
+            const createdAtMs = toEpochMs(mergedCreatedAt) || Date.now()
+            const lastLoginAtMs = toEpochMs(mergedLastLoginAt) || Date.now()
+            await runMigrationQuery(sql`
+                INSERT OR IGNORE INTO login_users (
+                    user_id,
+                    username,
+                    email,
+                    points,
+                    is_blocked,
+                    desktop_notifications_enabled,
+                    created_at,
+                    last_login_at
+                ) VALUES (
+                    ${canonicalUserId},
+                    ${normalizedUsername},
+                    ${mergedEmail},
+                    ${mergedPoints},
+                    ${mergedBlocked ? 1 : 0},
+                    ${mergedDesktopNotifications ? 1 : 0},
+                    ${createdAtMs},
+                    ${lastLoginAtMs}
+                )
+            `)
+        }
+
+        await db.update(loginUsers)
+            .set({
+                username: normalizedUsername,
+                email: mergedEmail,
+                points: mergedPoints,
+                isBlocked: mergedBlocked,
+                desktopNotificationsEnabled: mergedDesktopNotifications,
+                createdAt: mergedCreatedAt,
+                lastLoginAt: mergedLastLoginAt,
+            })
+            .where(eq(loginUsers.userId, canonicalUserId))
+
+        await runMigrationQuery(sql`
+            UPDATE orders
+            SET username = ${normalizedUsername}
+            WHERE user_id = ${canonicalUserId}
+              AND (username IS NULL OR LOWER(username) <> ${normalizedUsername})
+        `)
+        await runMigrationQuery(sql`
+            UPDATE reviews
+            SET username = ${normalizedUsername}
+            WHERE user_id = ${canonicalUserId}
+              AND (username IS NULL OR LOWER(username) <> ${normalizedUsername})
+        `)
+        await runMigrationQuery(sql`
+            UPDATE refund_requests
+            SET username = ${normalizedUsername}
+            WHERE user_id = ${canonicalUserId}
+              AND (username IS NULL OR LOWER(username) <> ${normalizedUsername})
+        `)
+        await runMigrationQuery(sql`
+            UPDATE user_messages
+            SET username = ${normalizedUsername}
+            WHERE user_id = ${canonicalUserId}
+              AND (username IS NULL OR LOWER(username) <> ${normalizedUsername})
+        `)
+        await runMigrationQuery(sql`
+            UPDATE wishlist_items
+            SET username = ${normalizedUsername}
+            WHERE user_id = ${canonicalUserId}
+              AND (username IS NULL OR LOWER(username) <> ${normalizedUsername})
+        `)
+
+        for (const row of rows) {
+            if (row.userId === canonicalUserId) continue
+            await moveUserReferences(row.userId, canonicalUserId)
         }
     }
 }

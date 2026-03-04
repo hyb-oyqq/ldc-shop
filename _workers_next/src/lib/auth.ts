@@ -120,7 +120,7 @@ async function runAuthMigrationStep(statement: any) {
     }
 }
 
-async function migrateLegacyGitHubUserId(sourceUserId: string, targetUserId: string, username?: string | null) {
+async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, username?: string | null) {
     if (!sourceUserId || !targetUserId || sourceUserId === targetUserId) return
 
     const normalizedUsername = username?.trim().toLowerCase() || null
@@ -275,7 +275,7 @@ async function migrateLegacyGitHubUserId(sourceUserId: string, targetUserId: str
 
         await runAuthMigrationStep(sql`DELETE FROM login_users WHERE user_id = ${sourceUserId}`)
     } catch (error) {
-        console.warn("[auth] github legacy user id migration failed", {
+        console.warn("[auth] legacy user id migration failed", {
             sourceUserId,
             targetUserId,
             error,
@@ -332,7 +332,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                         const normalizedExistingId = normalizeGitHubUserId(existingUserId)
                         if (canonicalGitHubId) {
                             if (existingUserId !== canonicalGitHubId) {
-                                await migrateLegacyGitHubUserId(existingUserId, canonicalGitHubId, resolvedUsername)
+                                await migrateLegacyUserId(existingUserId, canonicalGitHubId, resolvedUsername)
                             }
                             resolvedId = canonicalGitHubId
                         } else if (normalizedExistingId) {
@@ -342,15 +342,28 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                         }
                     }
                 } else if (account?.provider === "linuxdo") {
-                    const linuxDoProfileId = (profile as any)?.id
-                    if (linuxDoProfileId !== undefined && linuxDoProfileId !== null && String(linuxDoProfileId).trim() !== "") {
-                        resolvedId = String(linuxDoProfileId)
+                    // Linux DO user id must be the official immutable `id` field from userinfo.
+                    const rawLinuxDoId = (profile as any)?.id
+                    const canonicalLinuxDoId =
+                        rawLinuxDoId === undefined || rawLinuxDoId === null
+                            ? null
+                            : String(rawLinuxDoId).trim()
+
+                    if (!canonicalLinuxDoId) {
+                        console.error("[auth] linuxdo canonical id missing", {
+                            profileId: (profile as any)?.id ?? null,
+                            username: resolvedUsername ?? null,
+                        })
+                        throw new Error("LINUXDO_CANONICAL_ID_MISSING")
                     }
 
                     const existingLinuxDoUserId = await resolveExistingLinuxDoUserIdByUsername(resolvedUsername)
                     if (existingLinuxDoUserId) {
-                        resolvedId = existingLinuxDoUserId
+                        if (existingLinuxDoUserId !== canonicalLinuxDoId) {
+                            await migrateLegacyUserId(existingLinuxDoUserId, canonicalLinuxDoId, resolvedUsername)
+                        }
                     }
+                    resolvedId = canonicalLinuxDoId
                 }
 
                 token.id = resolvedId
@@ -362,7 +375,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             }
 
             if (profile && account?.provider === "linuxdo") {
-                token.id = String((profile as any).id)
+                const rawLinuxDoId = (profile as any)?.id
+                const linuxDoId =
+                    rawLinuxDoId === undefined || rawLinuxDoId === null
+                        ? null
+                        : String(rawLinuxDoId).trim()
+                if (!linuxDoId) {
+                    console.error("[auth] linuxdo profile.id missing in profile callback", {
+                        profileId: (profile as any)?.id ?? null,
+                        username: (profile as any)?.username ?? null,
+                    })
+                    throw new Error("LINUXDO_CANONICAL_ID_MISSING")
+                }
+
+                token.id = linuxDoId
                 token.username = (profile as any).username
                 token.trustLevel = (profile as any).trust_level
                 token.avatar_url = (profile as any).avatar_url
